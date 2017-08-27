@@ -1,0 +1,9 @@
+[package]
+name = "file-converter"
+version = "0.1.0"
+authors = ["Thomas G. <github@t-jay.net>"]
+
+[dependencies]
+byteorder = "1.1.0"
+rustfft = "2.0.0"
+rand = "0.3.16"
