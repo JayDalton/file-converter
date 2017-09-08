@@ -1,7 +1,31 @@
 extern crate byteorder;
+// extern crate bytepack;
 extern crate rustfft;
 extern crate rand;
 // extern crate num;
+
+#[macro_use]
+extern crate serde_derive;
+
+extern crate serde;
+extern crate rmp_serde as rmps;
+
+use serde::{Deserialize, Serialize};
+use rmps::{Deserializer, Serializer};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Matrix {
+    rows: u16,
+    cols: u16,
+    data: Vec<f32>
+}
+
+// use rustc_serialize::{Encodable, Decodable};
+// use rmp_serialize::{Encoder, Decoder};
+
+use std::iter::repeat;
+
+// use bytepack::{LEPacker, LEUnpacker};
 
 use std::io::{self, Cursor, Read, Write};
 use std::error::Error;
@@ -27,6 +51,7 @@ use rand::distributions::{Normal, IndependentSample};
 // use std::f32;
 // use std::num;
 
+
 fn main() {
 
     // call: FileToImage.raw 4320 4318 1
@@ -46,19 +71,32 @@ fn main() {
 
         if check_file_metadata(input_name, img_rows * img_cols) 
         {
-            let content = get_file_content_u16(input_name, swap);
+            // let file = File::open(input_name);
 
-            // let mtx_u16 = get_short_matrix(&content, img_rows, img_cols);
-            let mtx_f32 = get_float_matrix(&content, img_rows, img_cols);
+            let content = get_file_content_f32(input_name, swap);
 
-            let mut complex = get_complex_matrix(&mtx_f32);
-            let fourier = fft_complex_matrix(&mut complex);
+            let value = Matrix {
+                rows: img_rows as u16,
+                cols: img_cols as u16,
+                data: content
+            };
 
-            let magnitude = get_magnitude_from(&fourier);
+            // let mut buf = Vec::new();
+            let mut f = File::create(output_temp).unwrap();
+            value.serialize(&mut Serializer::new(&mut f)).unwrap();
+            
 
-            set_file_logging_f32(&file_magnitude, &magnitude);
+            // // let mtx_u16 = get_short_matrix(&content, img_rows, img_cols);
+            // let mtx_f32 = get_float_matrix(&content, img_rows, img_cols);
 
-            // set_file_content_u16(&output_temp, c);
+            // let mut complex = get_complex_matrix(&mtx_f32);
+            // let fourier = fft_complex_matrix(&mut complex);
+
+            // let magnitude = get_magnitude_from(&fourier);
+
+            // set_file_logging_f32(&file_magnitude, &magnitude);
+
+            // // set_file_content_u16(&output_temp, c);
 
 
         } else {
@@ -152,6 +190,20 @@ fn get_file_content_u8(s: &str) -> Vec<u8> {
     contents
 }
 
+// fn write_samples(file: &str, samples: &Vec<f32>) {
+//     let mut file = File::create(file).unwrap();
+//     file.pack(samples.len() as u32).unwrap();
+//     file.pack_all(&samples[..]).unwrap();
+// }
+
+// fn read_samples(file: &str) -> Vec<f32> {
+//     let mut file = File::open(file).unwrap();
+//     let num_samples : u32 = file.unpack().unwrap();
+//     let mut samples : Vec<f32> = repeat(0f32).take(num_samples as usize).collect();
+//     file.unpack_exact(&mut samples[..]).unwrap();
+//     return samples;
+// }
+
 fn get_file_content_u16(s: &str, swap: bool) -> Vec<u16> {
     let content = get_file_content_u8(s);
     let mut reader = Cursor::new(&content);
@@ -161,6 +213,20 @@ fn get_file_content_u16(s: &str, swap: bool) -> Vec<u16> {
             converted.push(reader.read_u16::<BigEndian>().unwrap());
         } else {
             converted.push(reader.read_u16::<LittleEndian>().unwrap());
+        }
+    }
+    converted
+}
+
+fn get_file_content_f32(s: &str, swap: bool) -> Vec<f32> {
+    let content = get_file_content_u8(s);
+    let mut reader = Cursor::new(&content);
+    let mut converted: Vec<f32> = Vec::new();
+    while reader.position() < content.len() as u64 {
+        if swap {
+            converted.push(reader.read_f32::<BigEndian>().unwrap());
+        } else {
+            converted.push(reader.read_f32::<LittleEndian>().unwrap());
         }
     }
     converted
@@ -181,20 +247,32 @@ fn set_file_logging_u16(name: &str, data: &Vec<Vec<u16>>) {
     }
 }
 
+// write mtx to binary f32
 fn set_file_logging_f32(name: &str, data: &Vec<Vec<f32>>) {
-    let mut outfile = File::create(name).expect("could not create file");
 
+    let mut result: Vec<u8> = Vec::new();
     for line in data {
         for value in line {
-            write!(outfile, "{:.4};", value).expect("could not write to file");
-            // outfile.write_fmt(format_args!("{}", value));
-            // match write!(outfile, "{}", value) {
-            //     Err(why) => { panic!("couldn't write to {}: {}", name, why.description()) }
-            //     Ok(_) => println!("successfully wrote to {}", name),
-            // }
+            // let _ = result.write_f32::<LittleEndian>(value);
+            
         }
-        writeln!(outfile, "").expect("could not write to file")
+
     }
+    set_file_content_u8(name, result);
+
+    // let mut outfile = File::create(name).expect("could not create file");
+
+    // for line in data {
+    //     for value in line {
+    //         write!(outfile, "{:.4};", value).expect("could not write to file");
+    //         // outfile.write_fmt(format_args!("{}", value));
+    //         // match write!(outfile, "{}", value) {
+    //         //     Err(why) => { panic!("couldn't write to {}: {}", name, why.description()) }
+    //         //     Ok(_) => println!("successfully wrote to {}", name),
+    //         // }
+    //     }
+    //     writeln!(outfile, "").expect("could not write to file")
+    // }
 }
 
 fn set_file_content_u16(name: &str, values: Vec<u16>) {

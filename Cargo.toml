@@ -7,3 +7,6 @@ authors = ["Thomas G. <github@t-jay.net>"]
 byteorder = "1.1.0"
 rustfft = "2.0.0"
 rand = "0.3.16"
+serde = "1.0.12"
+rmp-serde = "0.13.6"
+serde_derive = "1.0.12"
