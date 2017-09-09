@@ -1,15 +1,14 @@
-extern crate byteorder;
-// extern crate bytepack;
-extern crate rustfft;
 extern crate rand;
+extern crate rustfft;
 extern crate num_cpus;
-// extern crate num;
+extern crate byteorder;
 
+// Messagepack
+extern crate serde;
 #[macro_use]
 extern crate serde_derive;
-
-extern crate serde;
 extern crate rmp_serde as rmps;
+
 
 use serde::{Deserialize, Serialize};
 use rmps::{Deserializer, Serializer};
@@ -21,21 +20,14 @@ struct Matrix {
     data: Vec<f32>
 }
 
-
-
+// Threading
 use std::thread;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-// use rustc_serialize::{Encodable, Decodable};
-// use rmp_serialize::{Encoder, Decoder};
-
-use std::iter::repeat;
-
+// Benchmark Timing
 use std::time::{Duration, Instant};
-
-// use bytepack::{LEPacker, LEUnpacker};
 
 use std::io::{self, Cursor, Read, Write};
 use std::error::Error;
@@ -45,8 +37,6 @@ use std::fs;
 use std::fs::File;
 use std::path::Path;
 use std::iter;
-// use std::string;
-// use std::option::Option;
     
 use byteorder::{BigEndian, ReadBytesExt, LittleEndian, WriteBytesExt};
 
@@ -57,10 +47,9 @@ use rustfft::num_traits::Zero;
 // use rustfft::algorithm::DFT;
 // use rustfft::algorithm::FFT;
 
+// Randomize
 use rand::{StdRng, SeedableRng};
 use rand::distributions::{Normal, IndependentSample};
-// use std::f32;
-// use std::num;
 
 
 fn main() {
@@ -93,7 +82,7 @@ fn main() {
             let mut now = Instant::now();
 
             let content = read_file_from_u16_to_f32(&input_name, swap);
-            save_matrix_f32_to_msgpack(&fname_temp, &content, img_rows, img_cols);
+            save_matrix_f32_to_msgpack(&format!("{}.rst.content.u16", input_name), &content, img_rows, img_cols);
 
             let complex = get_complex_matrix_2d(&content, img_rows, img_cols);
             let complex = get_complex_matrix(&content, img_rows, img_cols);
