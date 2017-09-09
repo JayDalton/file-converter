@@ -20,6 +20,9 @@ struct Matrix {
     data: Vec<f32>
 }
 
+use std::thread;
+
+
 // use rustc_serialize::{Encodable, Decodable};
 // use rmp_serialize::{Encoder, Decoder};
 
@@ -42,6 +45,7 @@ use byteorder::{BigEndian, ReadBytesExt, LittleEndian, WriteBytesExt};
 
 use rustfft::FFTplanner;
 use rustfft::num_complex::Complex;
+use rustfft::num_complex::Complex32;
 use rustfft::num_traits::Zero;
 // use rustfft::algorithm::DFT;
 // use rustfft::algorithm::FFT;
@@ -57,12 +61,15 @@ fn main() {
     // call: FileToImage.raw 4320 4318 1
     let args: Vec<String> = env::args().skip(1).take(5).collect();
 
+    test_multi_thread_fft();
+
     if args.len() > 2 {
 
         let input_name = &args[0];
         let output_temp = format!("{}.tmp", &args[0]);
+        let output_test = format!("{}.tst", &args[0]);
         let output_name = format!("{}.out", &args[0]);
-        let file_magnitude = format!("{}.out", &args[0]);
+        let output_magnitude = format!("{}.mag", &args[0]);
 
         let img_rows: usize = args[1].trim().parse().expect("2nd arg no number");
         let img_cols: usize = args[2].trim().parse().expect("3rd arg no number");
@@ -71,33 +78,47 @@ fn main() {
 
         if check_file_metadata(input_name, img_rows * img_cols) 
         {
-            // let file = File::open(input_name);
+            let content = read_file_from_u16_to_f32(input_name, swap);
+            if content.len() == img_rows * img_cols {
+                let value = Matrix {
+                    rows: img_rows as u16,
+                    cols: img_cols as u16,
+                    data: content.clone()
+                };
 
-            let content = get_file_content_f32(input_name, swap);
+                let mut f = File::create(&output_test).unwrap();
+                value.serialize(&mut Serializer::new(&mut f)).unwrap();
+            }
 
-            let value = Matrix {
-                rows: img_rows as u16,
-                cols: img_cols as u16,
-                data: content
-            };
+            let complex = get_complex_matrix(&content, img_rows, img_cols);
+            let complex_mag = get_magnitude_from(&complex);
+            let flatten = get_flatten_matrix(&complex_mag);
+            if flatten.len() == img_rows * img_cols {
+                let value = Matrix {
+                    rows: img_rows as u16,
+                    cols: img_cols as u16,
+                    data: flatten
+                };
 
-            // let mut buf = Vec::new();
-            let mut f = File::create(output_temp).unwrap();
-            value.serialize(&mut Serializer::new(&mut f)).unwrap();
-            
+                let mut f = File::create(&output_temp).unwrap();
+                value.serialize(&mut Serializer::new(&mut f)).unwrap();
+            }
 
-            // // let mtx_u16 = get_short_matrix(&content, img_rows, img_cols);
-            // let mtx_f32 = get_float_matrix(&content, img_rows, img_cols);
 
-            // let mut complex = get_complex_matrix(&mtx_f32);
-            // let fourier = fft_complex_matrix(&mut complex);
+            let fourier = fft_complex_matrix(&complex);
 
-            // let magnitude = get_magnitude_from(&fourier);
+            let magnitude = get_magnitude_from(&fourier);
+            let flatten = get_flatten_matrix(&magnitude);
+            if flatten.len() == img_rows * img_cols {
+                let value = Matrix {
+                    rows: img_rows as u16,
+                    cols: img_cols as u16,
+                    data: flatten
+                };
 
-            // set_file_logging_f32(&file_magnitude, &magnitude);
-
-            // // set_file_content_u16(&output_temp, c);
-
+                let mut f = File::create(&output_name).unwrap();
+                value.serialize(&mut Serializer::new(&mut f)).unwrap();
+            }
 
         } else {
             println!("File not readable.");
@@ -106,7 +127,35 @@ fn main() {
     } else {
         println!("Aufruf: path/to/image img_rows img_cols <swap>");
     }
+}
 
+fn test_multi_thread_fft() {
+    let inverse = false;
+    let mut planner = FFTplanner::new(inverse);
+    let fft = planner.plan_fft(100);
+
+    let threads: Vec<thread::JoinHandle<_>> = (0..2).map(|_| {
+        let fft_copy = fft.clone();
+        thread::spawn(move || {
+            let mut signal = vec![Complex32::new(0.0, 0.0); 100];
+            let mut spectrum = vec![Complex32::new(0.0, 0.0); 100];
+            fft_copy.process(&mut signal, &mut spectrum);
+        })
+    }).collect();
+
+    for thread in threads {
+        thread.join().unwrap();
+    }
+}
+
+fn get_flatten_matrix(matrix: &Vec<Vec<f32>>) -> Vec<f32> {
+    let mut result: Vec<f32> = Vec::with_capacity(matrix.len());
+
+    for line in matrix {
+        result.extend(line);
+    }
+
+    result    
 }
 
 fn get_magnitude_from(matrix: &Vec<Vec<Complex<f32>>>) -> Vec<Vec<f32>> {
@@ -122,22 +171,48 @@ fn get_magnitude_from(matrix: &Vec<Vec<Complex<f32>>>) -> Vec<Vec<f32>> {
     result
 }
 
-fn fft_complex_matrix(data: &mut Vec<Vec<Complex<f32>>>) -> Vec<Vec<Complex<f32>>> {
-    let mut result: Vec<Vec<Complex<f32>>> = Vec::with_capacity(data.len());
+fn fft_complex_matrix(matrix: &Vec<Vec<Complex<f32>>>) -> Vec<Vec<Complex<f32>>> {
+    let mut result: Vec<Vec<Complex<f32>>> = Vec::with_capacity(matrix.len());
 
     let mut planner = FFTplanner::new(false);
+    let fft = planner.plan_fft(matrix.len());
 
-    for line in &mut *data {
-        let fft = planner.plan_fft(line.len());
-        let mut output: Vec<Complex<f32>> = vec![Complex::zero(); line.len()];
-        fft.process(&mut *line, &mut output);
+    let mut counter = 0;
+
+    for line in &*matrix {
+        let mut input = line.clone();
+        let mut output: Vec<Complex<f32>> = vec![Complex32::zero(); line.len()];
+        fft.process(&mut input, &mut output);
         result.push(output);
+
+        // println!("{}", counter++);
     }
 
     result
 }
 
-fn get_complex_matrix(data: &Vec<Vec<f32>>) -> Vec<Vec<Complex<f32>>> {
+fn get_complex_matrix(values: &Vec<f32>, rows: usize, cols: usize) -> Vec<Vec<Complex<f32>>> {
+    let mut result: Vec<Vec<Complex<f32>>> = Vec::with_capacity(rows);
+
+    for row in values.chunks(cols) {
+        let mut onerow: Vec<Complex<f32>> = Vec::with_capacity(cols);
+        for val in row { onerow.push(Complex {re: *val, im: 0f32}); }
+        result.push(onerow);
+        // let mut onerow: Vec<f32> = Vec::with_capacity(cols);
+        // for col in row { onerow.push(*col as f32); }
+        // result.push(onerow);
+    }
+
+    // for row in data {
+    //     let mut onerow: Vec<Complex<f32>> = Vec::with_capacity(row.len());
+    //     for val in row { onerow.push(Complex {re: *val, im: 0f32}); }
+    //     result.push(onerow);
+    // }
+
+    result
+}
+
+fn get_complex_matrix_old(data: &Vec<Vec<f32>>) -> Vec<Vec<Complex<f32>>> {
     let mut result: Vec<Vec<Complex<f32>>> = Vec::with_capacity(data.len());
 
     for row in data {
@@ -160,8 +235,13 @@ fn get_short_matrix(data: &Vec<u16>, rows: usize, cols: usize) -> Vec<Vec<u16>> 
     result
 }
 
+fn get_float_matrix(values: &Vec<f32>, rows: usize, cols: usize) -> Vec<Vec<f32>> {
+    assert!(rows * cols == values.len());
+    let mut result: Vec<Vec<f32>> = Vec::with_capacity(values.len());
+    result
+}
 
-fn get_float_matrix(data: &Vec<u16>, rows: usize, cols: usize) -> Vec<Vec<f32>> {
+fn get_float_matrix_old(data: &Vec<u16>, rows: usize, cols: usize) -> Vec<Vec<f32>> {
     assert!(rows * cols == data.len());
     let mut result: Vec<Vec<f32>> = Vec::with_capacity(data.len());
 
@@ -183,11 +263,38 @@ fn check_file_metadata(s: &str, l: usize) -> bool {
 }
 
 fn get_file_content_u8(s: &str) -> Vec<u8> {
-
     let mut contents: Vec<u8> = Vec::new();
     let mut in_file = File::open(s).expect("could not open file");
     let _ = in_file.read_to_end(&mut contents);
     contents
+}
+
+fn read_file_from_u16_to_f32(s: &str, swap: bool) -> Vec<f32> {
+    let content = get_file_content_u8(s);
+    let mut reader = Cursor::new(&content);
+    let mut converted: Vec<f32> = Vec::new();
+    while reader.position() < content.len() as u64 {
+        if swap {
+            converted.push(reader.read_u16::<BigEndian>().unwrap() as f32);
+        } else {
+            converted.push(reader.read_u16::<LittleEndian>().unwrap() as f32);
+        }
+    }
+    converted
+}
+
+fn get_file_content_from_u16(s: &str, swap: bool) -> Vec<u16> {
+    let content = get_file_content_u8(s);
+    let mut reader = Cursor::new(&content);
+    let mut converted: Vec<u16> = Vec::new();
+    while reader.position() < content.len() as u64 {
+        if swap {
+            converted.push(reader.read_u16::<BigEndian>().unwrap());
+        } else {
+            converted.push(reader.read_u16::<LittleEndian>().unwrap());
+        }
+    }
+    converted
 }
 
 // fn write_samples(file: &str, samples: &Vec<f32>) {
@@ -204,33 +311,6 @@ fn get_file_content_u8(s: &str) -> Vec<u8> {
 //     return samples;
 // }
 
-fn get_file_content_u16(s: &str, swap: bool) -> Vec<u16> {
-    let content = get_file_content_u8(s);
-    let mut reader = Cursor::new(&content);
-    let mut converted: Vec<u16> = Vec::new();
-    while reader.position() < content.len() as u64 {
-        if swap {
-            converted.push(reader.read_u16::<BigEndian>().unwrap());
-        } else {
-            converted.push(reader.read_u16::<LittleEndian>().unwrap());
-        }
-    }
-    converted
-}
-
-fn get_file_content_f32(s: &str, swap: bool) -> Vec<f32> {
-    let content = get_file_content_u8(s);
-    let mut reader = Cursor::new(&content);
-    let mut converted: Vec<f32> = Vec::new();
-    while reader.position() < content.len() as u64 {
-        if swap {
-            converted.push(reader.read_f32::<BigEndian>().unwrap());
-        } else {
-            converted.push(reader.read_f32::<LittleEndian>().unwrap());
-        }
-    }
-    converted
-}
 
 fn set_file_logging_u16(name: &str, data: &Vec<Vec<u16>>) {
     let mut outfile = File::create(name).expect("could not create file");
