@@ -2,6 +2,7 @@ extern crate byteorder;
 // extern crate bytepack;
 extern crate rustfft;
 extern crate rand;
+extern crate num_cpus;
 // extern crate num;
 
 #[macro_use]
@@ -20,13 +21,19 @@ struct Matrix {
     data: Vec<f32>
 }
 
-use std::thread;
 
+
+use std::thread;
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 // use rustc_serialize::{Encodable, Decodable};
 // use rmp_serialize::{Encoder, Decoder};
 
 use std::iter::repeat;
+
+use std::time::{Duration, Instant};
 
 // use bytepack::{LEPacker, LEUnpacker};
 
@@ -61,64 +68,52 @@ fn main() {
     // call: FileToImage.raw 4320 4318 1
     let args: Vec<String> = env::args().skip(1).take(5).collect();
 
+    println!("Logical CPUs: {}", num_cpus::get());
+    println!("Physical CPUs: {}", num_cpus::get_physical());
+
     test_multi_thread_fft();
+
+    fft_complex_matrix_async();
 
     if args.len() > 2 {
 
         let input_name = &args[0];
-        let output_temp = format!("{}.tmp", &args[0]);
-        let output_test = format!("{}.tst", &args[0]);
-        let output_name = format!("{}.out", &args[0]);
-        let output_magnitude = format!("{}.mag", &args[0]);
+        let fname_temp = &format!("{}.tmp", &args[0]);
+        let fname_test = &format!("{}.tst", &args[0]);
+        let fname_name = &format!("{}.out", &args[0]);
+        let fname_magnitude = format!("{}.mag", &args[0]);
 
         let img_rows: usize = args[1].trim().parse().expect("2nd arg no number");
         let img_cols: usize = args[2].trim().parse().expect("3rd arg no number");
 
         let swap: bool = if args.len() == 4 { true } else { false };
 
-        if check_file_metadata(input_name, img_rows * img_cols) 
+        if check_file_metadata(&input_name, img_rows * img_cols) 
         {
-            let content = read_file_from_u16_to_f32(input_name, swap);
-            if content.len() == img_rows * img_cols {
-                let value = Matrix {
-                    rows: img_rows as u16,
-                    cols: img_cols as u16,
-                    data: content.clone()
-                };
+            let mut now = Instant::now();
 
-                let mut f = File::create(&output_test).unwrap();
-                value.serialize(&mut Serializer::new(&mut f)).unwrap();
-            }
+            let content = read_file_from_u16_to_f32(&input_name, swap);
+            save_matrix_f32_to_msgpack(&fname_temp, &content, img_rows, img_cols);
 
+            let complex = get_complex_matrix_2d(&content, img_rows, img_cols);
             let complex = get_complex_matrix(&content, img_rows, img_cols);
-            let complex_mag = get_magnitude_from(&complex);
-            let flatten = get_flatten_matrix(&complex_mag);
-            if flatten.len() == img_rows * img_cols {
-                let value = Matrix {
-                    rows: img_rows as u16,
-                    cols: img_cols as u16,
-                    data: flatten
-                };
+            // let complex = get_complex_matrix_old(&content);
 
-                let mut f = File::create(&output_temp).unwrap();
-                value.serialize(&mut Serializer::new(&mut f)).unwrap();
-            }
+            // let complex_mag = get_magnitude_from(&complex);
+            // let flatten = get_flatten_matrix(&complex_mag);
+            // save_matrix_f32_to_msgpack(&fname_test, &flatten, img_rows, img_cols);
 
+            // now = dump_duration(now, "passed complex matrix");
 
-            let fourier = fft_complex_matrix(&complex);
+            // let fourier = fft_complex_matrix(&complex);
 
-            let magnitude = get_magnitude_from(&fourier);
-            let flatten = get_flatten_matrix(&magnitude);
-            if flatten.len() == img_rows * img_cols {
-                let value = Matrix {
-                    rows: img_rows as u16,
-                    cols: img_cols as u16,
-                    data: flatten
-                };
+            // now = dump_duration(now, "passed fft complex");
 
-                let mut f = File::create(&output_name).unwrap();
-                value.serialize(&mut Serializer::new(&mut f)).unwrap();
-            }
+            // let magnitude = get_magnitude_from(&fourier);
+            // let flatten = get_flatten_matrix(&magnitude);
+            // save_matrix_f32_to_msgpack(&fname_name, &flatten, img_rows, img_cols);
+
+            println!("the end ...");
 
         } else {
             println!("File not readable.");
@@ -129,10 +124,57 @@ fn main() {
     }
 }
 
+fn dump_duration(now: std::time::Instant, label: &str) -> Instant {
+    let duration = now.elapsed();
+    println!("{}: {} secs", label, duration.as_secs() as f64 + duration.subsec_nanos() as f64 * 1e-9);
+    Instant::now()
+}
+
+fn save_matrix_f32_to_msgpack(fname: &str, values: &Vec<f32>, rows: usize, cols: usize) {
+    debug_assert_eq!(values.len(), rows * cols);
+    let now = Instant::now();
+    if values.len() == rows * cols {
+        let content = Matrix {
+            rows: rows as u16,
+            cols: cols as u16,
+            data: values.clone()
+        };
+        let mut f = File::create(&fname).unwrap();
+        content.serialize(&mut Serializer::new(&mut f)).unwrap();
+    }
+    dump_duration(now, &format!("msgpack matrix to {}", fname));
+}
+
+fn fft_complex_matrix_async() {
+
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let vals = vec![
+            String::from("hi"),
+            String::from("from"),
+            String::from("the"),
+            String::from("thread"),
+        ];
+
+        for val in vals {
+            tx.send(val).unwrap();
+            // thread::sleep(Duration::from_secs(1));
+        }
+    });
+
+    for received in rx {
+        println!("Got: {}", received);
+    }
+
+}
+
 fn test_multi_thread_fft() {
     let inverse = false;
     let mut planner = FFTplanner::new(inverse);
     let fft = planner.plan_fft(100);
+
+    // let (tx, rx) = mpsc::channel();
 
     let threads: Vec<thread::JoinHandle<_>> = (0..2).map(|_| {
         let fft_copy = fft.clone();
@@ -146,6 +188,28 @@ fn test_multi_thread_fft() {
     for thread in threads {
         thread.join().unwrap();
     }
+
+
+}
+
+fn fft_complex_matrix(matrix: &Vec<Vec<Complex<f32>>>) -> Vec<Vec<Complex<f32>>> {
+    let mut result: Vec<Vec<Complex<f32>>> = Vec::with_capacity(matrix.len());
+
+    let mut planner = FFTplanner::new(false);
+    let fft = planner.plan_fft(matrix.len());
+
+    let mut counter = 0;
+
+    for line in &*matrix {
+        let mut input = line.clone();
+        let mut output: Vec<Complex<f32>> = vec![Complex32::zero(); line.len()];
+        fft.process(&mut input, &mut output);
+        result.push(output);
+
+        // println!("{}", counter++);
+    }
+
+    result
 }
 
 fn get_flatten_matrix(matrix: &Vec<Vec<f32>>) -> Vec<f32> {
@@ -171,48 +235,35 @@ fn get_magnitude_from(matrix: &Vec<Vec<Complex<f32>>>) -> Vec<Vec<f32>> {
     result
 }
 
-fn fft_complex_matrix(matrix: &Vec<Vec<Complex<f32>>>) -> Vec<Vec<Complex<f32>>> {
-    let mut result: Vec<Vec<Complex<f32>>> = Vec::with_capacity(matrix.len());
+fn get_complex_matrix_2d(values: &Vec<f32>, rows: usize, cols: usize) -> Vec<Vec<Complex<f32>>> {
+    debug_assert_eq!(values.len(), rows * cols);
 
-    let mut planner = FFTplanner::new(false);
-    let fft = planner.plan_fft(matrix.len());
-
-    let mut counter = 0;
-
-    for line in &*matrix {
-        let mut input = line.clone();
-        let mut output: Vec<Complex<f32>> = vec![Complex32::zero(); line.len()];
-        fft.process(&mut input, &mut output);
-        result.push(output);
-
-        // println!("{}", counter++);
-    }
-
-    result
-}
-
-fn get_complex_matrix(values: &Vec<f32>, rows: usize, cols: usize) -> Vec<Vec<Complex<f32>>> {
+    let now = Instant::now();
     let mut result: Vec<Vec<Complex<f32>>> = Vec::with_capacity(rows);
 
     for row in values.chunks(cols) {
         let mut onerow: Vec<Complex<f32>> = Vec::with_capacity(cols);
         for val in row { onerow.push(Complex {re: *val, im: 0f32}); }
         result.push(onerow);
-        // let mut onerow: Vec<f32> = Vec::with_capacity(cols);
-        // for col in row { onerow.push(*col as f32); }
-        // result.push(onerow);
     }
+    dump_duration(now, "get_complex_matrix_2d");
+    result
+}
 
-    // for row in data {
-    //     let mut onerow: Vec<Complex<f32>> = Vec::with_capacity(row.len());
-    //     for val in row { onerow.push(Complex {re: *val, im: 0f32}); }
-    //     result.push(onerow);
-    // }
+fn get_complex_matrix(values: &Vec<f32>, rows: usize, cols: usize) -> Vec<Complex32> {
+    debug_assert_eq!(values.len(), rows * cols);
 
+    let now = Instant::now();
+    let mut result: Vec<Complex32> = Vec::with_capacity(rows * cols);
+    for val in values { result.push(Complex32 {re: *val, im: 0f32}); }
+    dump_duration(now, "get_complex_matrix");
+
+    debug_assert_eq!(result.len(), rows * cols);
     result
 }
 
 fn get_complex_matrix_old(data: &Vec<Vec<f32>>) -> Vec<Vec<Complex<f32>>> {
+    let now = Instant::now();
     let mut result: Vec<Vec<Complex<f32>>> = Vec::with_capacity(data.len());
 
     for row in data {
@@ -220,7 +271,7 @@ fn get_complex_matrix_old(data: &Vec<Vec<f32>>) -> Vec<Vec<Complex<f32>>> {
         for val in row { onerow.push(Complex {re: *val, im: 0f32}); }
         result.push(onerow);
     }
-
+    dump_duration(now, "get_complex_matrix_old");
     result
 }
 
@@ -263,13 +314,16 @@ fn check_file_metadata(s: &str, l: usize) -> bool {
 }
 
 fn get_file_content_u8(s: &str) -> Vec<u8> {
+    let now = Instant::now();
     let mut contents: Vec<u8> = Vec::new();
     let mut in_file = File::open(s).expect("could not open file");
     let _ = in_file.read_to_end(&mut contents);
+    dump_duration(now, "read input file");
     contents
 }
 
 fn read_file_from_u16_to_f32(s: &str, swap: bool) -> Vec<f32> {
+    let now = Instant::now();
     let content = get_file_content_u8(s);
     let mut reader = Cursor::new(&content);
     let mut converted: Vec<f32> = Vec::new();
@@ -280,6 +334,7 @@ fn read_file_from_u16_to_f32(s: &str, swap: bool) -> Vec<f32> {
             converted.push(reader.read_u16::<LittleEndian>().unwrap() as f32);
         }
     }
+    dump_duration(now, "convert file to f32");
     converted
 }
 
